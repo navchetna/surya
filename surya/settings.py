@@ -8,6 +8,11 @@ from pydantic_settings import BaseSettings
 from pathlib import Path
 from platformdirs import user_cache_dir
 
+try:
+    import intel_extension_for_pytorch as ipex
+    HAS_IPEX = True
+except ImportError:
+    HAS_IPEX = False
 
 class Settings(BaseSettings):
     # General
@@ -174,7 +179,7 @@ class Settings(BaseSettings):
     @computed_field
     def MODEL_DTYPE(self) -> torch.dtype:
         if self.TORCH_DEVICE_MODEL == "cpu":
-            return torch.float32
+            return torch.bfloat16 if HAS_IPEX else torch.float32
         if self.TORCH_DEVICE_MODEL == "xla":
             return torch.bfloat16
         return torch.float16
@@ -182,7 +187,7 @@ class Settings(BaseSettings):
     @computed_field
     def MODEL_DTYPE_BFLOAT(self) -> torch.dtype:
         if self.TORCH_DEVICE_MODEL == "cpu":
-            return torch.float32
+            return torch.bfloat16 if HAS_IPEX else torch.float32
         if self.TORCH_DEVICE_MODEL == "mps":
             return torch.bfloat16
         return torch.bfloat16
