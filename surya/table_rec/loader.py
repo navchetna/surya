@@ -1,90 +1,7 @@
-# from typing import Optional
-
-# import torch
-
-# from surya.common.load import ModelLoader
-# from surya.logging import get_logger
-# from surya.settings import settings
-# from surya.table_rec.model.config import (
-#     SuryaTableRecConfig,
-#     SuryaTableRecDecoderConfig,
-#     DonutSwinTableRecConfig,
-# )
-# from surya.table_rec.model.encoderdecoder import TableRecEncoderDecoderModel
-# from surya.table_rec.processor import SuryaTableRecProcessor
-
-# logger = get_logger()
-
-
-# class TableRecModelLoader(ModelLoader):
-#     def __init__(self, checkpoint: Optional[str] = None):
-#         super().__init__(checkpoint)
-
-#         if self.checkpoint is None:
-#             self.checkpoint = settings.TABLE_REC_MODEL_CHECKPOINT
-
-#     def model(
-#         self, device=settings.TORCH_DEVICE_MODEL, dtype=settings.MODEL_DTYPE
-#     ) -> TableRecEncoderDecoderModel:
-#         if device is None:
-#             device = settings.TORCH_DEVICE_MODEL
-#         if dtype is None:
-#             dtype = settings.MODEL_DTYPE
-
-#         if device == "mps":
-#             logger.warning("`TableRecEncoderDecoderModel` is not compatible with mps backend. Defaulting to cpu instead")
-#             device = "cpu"
-#             dtype = "float32"
-
-#         config = SuryaTableRecConfig.from_pretrained(self.checkpoint)
-#         decoder_config = config.decoder
-#         decoder = SuryaTableRecDecoderConfig(**decoder_config)
-#         config.decoder = decoder
-
-#         encoder_config = config.encoder
-#         encoder = DonutSwinTableRecConfig(**encoder_config)
-#         config.encoder = encoder
-
-#         model = TableRecEncoderDecoderModel.from_pretrained(
-#             self.checkpoint, config=config, torch_dtype=dtype
-#         )
-
-#         model = model.to(device)
-#         model = model.eval()
-
-#         if settings.COMPILE_ALL or settings.COMPILE_TABLE_REC:
-#             torch.set_float32_matmul_precision("high")
-#             torch._dynamo.config.cache_size_limit = 16
-#             torch._dynamo.config.suppress_errors = False
-
-#             logger.info(
-#                 f"Compiling table recognition model {self.checkpoint} on device {device} with dtype {dtype}"
-#             )
-#             compile_args = {"backend": "openxla"} if device == "xla" else {}
-#             model.encoder = torch.compile(model.encoder, **compile_args)
-#             model.decoder = torch.compile(model.decoder, **compile_args)
-
-#         logger.debug(
-#             f"Loaded table recognition model {self.checkpoint} from {TableRecEncoderDecoderModel.get_local_path(self.checkpoint)} onto device {device} with dtype {dtype}"
-#         )
-#         return model
-
-#     def processor(
-#         self, device=settings.TORCH_DEVICE_MODEL, dtype=settings.MODEL_DTYPE
-#     ) -> SuryaTableRecProcessor:
-#         processor = SuryaTableRecProcessor(self.checkpoint)
-
-#         processor.token_pad_id = 0
-#         processor.token_eos_id = 1
-#         processor.token_bos_id = 1
-#         processor.token_query_end_id = 4
-#         return processor
-# table_rec/loader.py (updated with IPEX frontend integration)
 from typing import Optional
 
 import torch
 
-# NEW: guarded IPEX import
 try:
     import intel_extension_for_pytorch as ipex
     HAS_IPEX = True
@@ -140,15 +57,12 @@ class TableRecModelLoader(ModelLoader):
         model = model.to(device)
         model = model.eval()
 
-        # NEW: IPEX frontend optimization (eager mode only)
         model._ipex_enabled = False
         model._ipex_bf16 = False
 
-        # Apply only on CPU
         on_cpu = str(device).startswith("cpu")
         if HAS_IPEX and on_cpu:
             try:
-                # BF16 preferred with weights_prepack=False
                 model = ipex.optimize(
                     model,
                     dtype=torch.bfloat16,
@@ -158,7 +72,6 @@ class TableRecModelLoader(ModelLoader):
                 model._ipex_enabled = True
                 model._ipex_bf16 = True
             except Exception:
-                # FP32 fallback
                 try:
                     model = ipex.optimize(
                         model,
@@ -169,10 +82,8 @@ class TableRecModelLoader(ModelLoader):
                     model._ipex_enabled = True
                     model._ipex_bf16 = False
                 except Exception:
-                    # Skip if all fail; continue as original
                     pass
 
-        # Keep compile if desired, but no IPEX-specific changes here
         if settings.COMPILE_ALL or settings.COMPILE_TABLE_REC:
             torch.set_float32_matmul_precision("high")
             torch._dynamo.config.cache_size_limit = 16
